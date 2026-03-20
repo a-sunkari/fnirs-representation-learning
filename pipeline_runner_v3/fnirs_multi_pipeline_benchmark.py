@@ -54,8 +54,8 @@ for env_key in [
 
 ROOT = str(Path.home() / "fnirs-representation-learning")
 DATASET_DIRNAME = "snirf_dataset_2"
-OUTPUT_DIRNAME = "outputs_benchmark_v7"
-OUTPUT_PREFIX = "benchmark_v7"
+OUTPUT_DIRNAME = "benchmark_outputs"
+OUTPUT_PREFIX = "alpha_v1"
 
 # Leave this empty to run every Subj* folder in the dataset directory.
 SUBJECT_NAMES = ["Subj94", "Subj100"]
