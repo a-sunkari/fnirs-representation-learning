@@ -1,3 +1,8 @@
 snirf_dataset_2/
 synthetic_hrf_generation/
 outputs/
+output_workspace/
+*.zip
+*.md
+!README.md
+__pycache__/
