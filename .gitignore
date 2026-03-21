@@ -7,3 +7,4 @@ output_workspace/
 !README.md
 __pycache__/
 chat_handoff_prompts/
+benchmark_outputs/*
