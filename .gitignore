@@ -8,3 +8,4 @@ output_workspace/
 __pycache__/
 chat_handoff_prompts/
 benchmark_outputs/*
+mprs_od_cw_exploration/*
