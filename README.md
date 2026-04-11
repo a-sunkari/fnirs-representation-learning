@@ -1,3 +1,7 @@
+# NOTE: Under Construction
+- Benchmarking scripts and representational learning models will be uploaded shortly.
+- Datasets and multivariate phase randomization tools are present (as of 4/11/26)
+
 # fNIRS Representaion Learning Codebase
 
 ## Necessary files:
