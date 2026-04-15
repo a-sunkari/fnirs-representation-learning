@@ -548,7 +548,7 @@ fig = px.line(
     facet_row="channel_name",
     title=f"{SUBJECT} {FILE_LABEL}: original vs surrogate OD traces",
 )
-fig.update_layout(height=900)
+fig.update_layout(height=2000)
 fig.show()
 
 # %%
@@ -956,5 +956,210 @@ review_df.sort_values(
     ["needs_manual_review", "sci_cross_fail_max", "delta_bad_pairs_max"],
     ascending=[False, False, False],
 )
+
+# %%
+# %%
+from pathlib import Path
+import shutil
+import h5py
+import numpy as np
+import pandas as pd
+import mne
+
+from mne.preprocessing.nirs import optical_density
+
+# -----------------------------
+# User settings
+# -----------------------------
+ROOT = Path.home() / "fnirs-representation-learning"
+DATASET_DIR = ROOT / "snirf_dataset_2"
+
+N_SURROGATES = 5
+SEED = 42
+OVERWRITE = True
+
+# -----------------------------
+# Helper functions
+# -----------------------------
+def get_cw_channel_indices(raw):
+    picks_fnirs = mne.pick_types(raw.info, fnirs=True)
+    channel_types = np.asarray(raw.get_channel_types())
+    return picks_fnirs[channel_types[picks_fnirs] == "fnirs_cw_amplitude"]
+
+
+def get_cw_and_od_matrices(raw_cw):
+    """
+    Returns:
+        cw_idx: indices of cw channels
+        cw_names: channel names
+        cw_matrix: shape (time, channels)
+        od_matrix: shape (time, channels)
+        cw_channel_means: channelwise means of CW amplitudes
+    """
+    cw_idx = get_cw_channel_indices(raw_cw)
+    cw_names = np.asarray(raw_cw.ch_names)[cw_idx].tolist()
+
+    cw_matrix = raw_cw.get_data(picks=cw_idx).T  # time x channels
+
+    raw_od = optical_density(raw_cw.copy())
+    od_matrix = raw_od.get_data(picks=cw_idx).T  # time x channels
+
+    cw_channel_means = cw_matrix.mean(axis=0)
+    cw_channel_means = np.maximum(cw_channel_means, 1e-12)
+
+    return cw_idx, cw_names, cw_matrix, od_matrix, cw_channel_means
+
+
+def multivariate_phase_randomized_surrogate(X, rng=None):
+    """
+    Conservative multivariate phase-randomized surrogate.
+    X shape: (time, channels)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    X = np.asarray(X, dtype=float)
+    n_time, n_channels = X.shape
+
+    channel_means = X.mean(axis=0, keepdims=True)
+    X0 = X - channel_means
+
+    F = np.fft.rfft(X0, axis=0)
+    n_freq = F.shape[0]
+
+    phase = np.zeros(n_freq)
+
+    if n_time % 2 == 0:
+        valid = np.arange(1, n_freq - 1)  # skip DC and Nyquist
+    else:
+        valid = np.arange(1, n_freq)      # skip DC only
+
+    phase[valid] = rng.uniform(0, 2 * np.pi, size=len(valid))
+    phase_factors = np.exp(1j * phase)[:, None]
+
+    Fs = F * phase_factors
+    Xs = np.fft.irfft(Fs, n=n_time, axis=0)
+    Xs = Xs + channel_means
+
+    return Xs
+
+
+def make_surrogates(X, n_surrogates=5, seed=42):
+    rng = np.random.default_rng(seed)
+    return [multivariate_phase_randomized_surrogate(X, rng=rng) for _ in range(n_surrogates)]
+
+
+def od_to_cw_matrix(od_matrix, cw_channel_means):
+    """
+    Approximate inverse of OD = -log(I / mean(I)).
+    Returns positive CW matrix with shape (time, channels).
+    """
+    cw_matrix = cw_channel_means[None, :] * np.exp(-od_matrix)
+    cw_matrix = np.maximum(cw_matrix, 1e-12)
+    return cw_matrix
+
+
+def write_matlab_compatible_surrogate_snirf(original_snirf_path, output_snirf_path, surrogate_cw_matrix):
+    """
+    Clone the original working SNIRF and replace only /nirs/data1/dataTimeSeries.
+    This preserves the original file structure that MATLAB likes.
+    """
+    original_snirf_path = Path(original_snirf_path)
+    output_snirf_path = Path(output_snirf_path)
+
+    if output_snirf_path.exists():
+        if OVERWRITE:
+            output_snirf_path.unlink()
+        else:
+            return
+
+    shutil.copy2(original_snirf_path, output_snirf_path)
+
+    with h5py.File(output_snirf_path, "r+") as f:
+        dset = f["/nirs/data1/dataTimeSeries"]
+        expected_shape = dset.shape
+        expected_dtype = dset.dtype
+
+        X = np.asarray(surrogate_cw_matrix)
+
+        # Match the original on-disk orientation exactly
+        if X.shape == expected_shape:
+            X_write = X
+        elif X.T.shape == expected_shape:
+            X_write = X.T
+        else:
+            raise ValueError(
+                f"Shape mismatch for {output_snirf_path.name}: "
+                f"surrogate {X.shape}, original dataset {expected_shape}"
+            )
+
+        dset[...] = X_write.astype(expected_dtype, copy=False)
+
+
+def export_subject_surrogates(subject_name, n_surrogates=5, seed=42):
+    """
+    Create MATLAB-compatible surrogate SNIRFs for one subject from resting_clean.snirf.
+    """
+    subj_dir = DATASET_DIR / subject_name
+    original_snirf = subj_dir / "resting_clean.snirf"
+
+    if not original_snirf.exists():
+        raise FileNotFoundError(f"Missing file: {original_snirf}")
+
+    raw_cw = mne.io.read_raw_snirf(original_snirf, preload=True, verbose=False)
+
+    cw_idx, cw_names, cw_matrix, od_matrix, cw_channel_means = get_cw_and_od_matrices(raw_cw)
+    od_surrogates = make_surrogates(od_matrix, n_surrogates=n_surrogates, seed=seed)
+    cw_surrogates = [od_to_cw_matrix(Xs, cw_channel_means) for Xs in od_surrogates]
+
+    rows = []
+    for i, Xcw in enumerate(cw_surrogates, start=1):
+        out_name = f"resting_clean_surrogate_{i:02d}.snirf"
+        out_path = subj_dir / out_name
+
+        write_matlab_compatible_surrogate_snirf(
+            original_snirf_path=original_snirf,
+            output_snirf_path=out_path,
+            surrogate_cw_matrix=Xcw,
+        )
+
+        rows.append({
+            "subject": subject_name,
+            "surrogate_id": i,
+            "output_snirf": str(out_path),
+            "cw_shape": str(Xcw.shape),
+            "cw_min": float(np.min(Xcw)),
+            "cw_max": float(np.max(Xcw)),
+            "cw_mean": float(np.mean(Xcw)),
+            "cw_std": float(np.std(Xcw)),
+            "cw_nonpositive_fraction": float(np.mean(Xcw <= 0)),
+        })
+
+    return rows
+
+# %%
+# %%
+ALL_SUBJECTS = sorted(
+    [p.name for p in DATASET_DIR.iterdir() if p.is_dir() and p.name.startswith("Subj")]
+)
+
+all_rows = []
+
+for subject_name in ALL_SUBJECTS:
+    print(f"Exporting surrogates for {subject_name}...")
+    rows = export_subject_surrogates(
+        subject_name=subject_name,
+        n_surrogates=N_SURROGATES,
+        seed=SEED,
+    )
+    all_rows.extend(rows)
+
+manifest_df = pd.DataFrame(all_rows)
+manifest_path = DATASET_DIR / "resting_clean_surrogate_export_manifest.csv"
+manifest_df.to_csv(manifest_path, index=False)
+
+print("\nDone.")
+print(f"Manifest written to: {manifest_path}")
+display(manifest_df)
 
 

@@ -9,3 +9,15 @@ __pycache__/
 chat_handoff_prompts/
 benchmark_outputs/*
 mprs_od_cw_exploration/*
+6-aggregates/*
+methods_info/*
+rl_analysis/*
+final_merged_output_v7/*
+notes.txt
+fir-retest.ipynb
+pipeline_analysis/flex_test_issues.ipynb
+pipeline_analysis/fnirs_subject_firstlook_plotly.ipynb
+pipeline_analysis/pipeline_analysis_notebook_v16_final_polish.py
+pipeline_analysis/pipeline_analysis_notebook_v16_final_polish.ipynb
+pipeline_analysis/pipeline_analysis_notebook_v16_final_polish_latest.py
+cheaha-start-working-node.txt
